@@ -1,0 +1,33 @@
+{
+  "summary": "First-finish smoke of APDCL Connect. Backend auth, RBAC, queries, voting, admin endpoints all healthy. Frontend flows for employee (login/dashboard/queries/vote/filter/post/notifications/profile/logout) and admin (login lands on /admin/employees, 4 seeded employees, All Queries page shows 4 queries) all pass. Invalid credentials show error. No blockers found.",
+  "tested_scope": ["frontend", "backend", "auth", "integration"],
+  "passed": [
+    "POST /api/auth/login admin (AP10000/Admin@123) returns JWT + admin user",
+    "POST /api/auth/login employee (AP10234/Employee@123) returns JWT + employee user",
+    "POST /api/auth/login invalid returns 401 with 'Invalid employee ID or password'",
+    "GET /api/queries without token -> 401 (JWT enforced)",
+    "GET /api/admin/employees with employee token -> 403 (role-based RBAC)",
+    "GET /api/queries returns 3 seeded queries with author info + counts",
+    "POST /api/queries/{id}/vote agree updates agree_count=1, my_vote=agree",
+    "GET /api/admin/employees (admin) returns 4 employees (admin excluded, filter role=employee works)",
+    "Frontend login form -> invalid password shows login-error",
+    "Employee dashboard renders welcome-hero with name/designation/department/ID and stat-posted/stat-engagement cards",
+    "Company Query page renders 3 query cards; agree-btn click succeeded; filter dropdown (week/all) works",
+    "Post Query submit creates new query; my-query card appears (confirmed via Admin All Queries showing 4 total)",
+    "Notification bell renders and opens; unread count badge visible (1) after vote",
+    "Profile page renders personal-info-card + change-password-card; wrong current password path executed",
+    "Sidebar logout returns to login-form",
+    "Admin login lands on /admin/employees with 4 emp-row entries",
+    "Admin All Queries shows 4 platform-wide queries with authors and delete controls"
+  ],
+  "failed": [],
+  "action_items": [],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "retest_needed": false,
+  "full_testing_deferred": true,
+  "notes": [
+    "Dashboard stats showed posted=0 for AP10234 before posting; expected since dashboard was loaded prior to Post Query submission (no bug, just navigation order).",
+    "No separate /api/notifications/unread-count endpoint exists; unread count is served via /api/notifications payload field 'unread_count' — matches frontend usage.",
+    "Deep coverage (password change happy path, edit/delete query dialogs, create/edit/delete employee cascade, notification mark-read/delete/mark-all, bcrypt DB check) deferred to full testing agent."
+  ]
+}
