@@ -3,6 +3,7 @@ import { ThumbsUp, ThumbsDown, MessageCircle, Send, Trash2, Pencil, Check, X } f
 import api, { formatApiError } from "../lib/api";
 import { toast } from "sonner";
 import { initialsOf, timeAgo } from "../lib/utils-date";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 
 const AVATAR_COLORS = ["#F97316", "#3B82F6", "#10B981", "#8B5CF6", "#EF4444", "#0EA5E9", "#EC4899"];
 function colorFor(id) {
@@ -243,7 +244,25 @@ function CommentLine({ c, me, onDelete, onEdit }) {
                 <span className="ml-2 text-[11px] text-slate-400">
                     {timeAgo(c.created_at)}
                     {c.updated_at && c.updated_at !== c.created_at && (
-                        <span className="ml-1 italic" title={`Edited ${timeAgo(c.updated_at)}`}>(edited)</span>
+                        <TooltipProvider delayDuration={150}>
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <span
+                                        data-testid={`comment-edited-marker-${c.id}`}
+                                        className="ml-1 italic underline decoration-dotted cursor-help"
+                                    >
+                                        (edited)
+                                    </span>
+                                </TooltipTrigger>
+                                <TooltipContent
+                                    side="top"
+                                    className="bg-slate-900 text-white text-[11px] font-medium"
+                                    data-testid={`comment-edited-tooltip-${c.id}`}
+                                >
+                                    Edited {timeAgo(c.updated_at)}
+                                </TooltipContent>
+                            </Tooltip>
+                        </TooltipProvider>
                     )}
                 </span>
             </div>
