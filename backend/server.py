@@ -110,6 +110,10 @@ class VoteIn(BaseModel):
     vote_type: Literal["agree", "disagree"]
 
 
+class CommentIn(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+
+
 class EmployeeIn(BaseModel):
     employee_id: str
     name: str
@@ -134,6 +138,8 @@ async def startup():
     await db.queries.create_index("user_id")
     await db.queries.create_index("created_at")
     await db.votes.create_index([("query_id", 1), ("user_id", 1)], unique=True)
+    await db.comments.create_index("query_id")
+    await db.comments.create_index("created_at")
     await db.notifications.create_index("recipient_user_id")
     await db.notifications.create_index("created_at")
     await seed_admin()
@@ -211,6 +217,7 @@ async def seed_sample_data():
 async def enrich_query(q: dict, viewer_id: Optional[str] = None) -> dict:
     author = await db.users.find_one({"id": q["user_id"]}, {"_id": 0, "password_hash": 0})
     votes = await db.votes.find({"query_id": q["id"]}, {"_id": 0}).to_list(10000)
+    comments = await db.comments.find({"query_id": q["id"]}, {"_id": 0}).sort("created_at", 1).to_list(10000)
     agree = sum(1 for v in votes if v["vote_type"] == "agree")
     disagree = sum(1 for v in votes if v["vote_type"] == "disagree")
     my_vote = None
@@ -219,13 +226,57 @@ async def enrich_query(q: dict, viewer_id: Optional[str] = None) -> dict:
             if v["user_id"] == viewer_id:
                 my_vote = v["vote_type"]
                 break
+
+    # Build participants: unique users who voted or commented
+    vote_by_user = {v["user_id"]: v["vote_type"] for v in votes}
+    comments_by_user: dict[str, list[dict]] = {}
+    for c in comments:
+        comments_by_user.setdefault(c["user_id"], []).append(c)
+
+    participant_ids = set(vote_by_user.keys()) | set(comments_by_user.keys())
+    participants = []
+    if participant_ids:
+        users = await db.users.find(
+            {"id": {"$in": list(participant_ids)}},
+            {"_id": 0, "password_hash": 0}
+        ).to_list(10000)
+        users_map = {u["id"]: u for u in users}
+        for uid in participant_ids:
+            u = users_map.get(uid)
+            if not u:
+                continue
+            participants.append({
+                "user_id": uid,
+                "name": u.get("name"),
+                "designation": u.get("designation"),
+                "department": u.get("department"),
+                "employee_id": u.get("employee_id"),
+                "vote_type": vote_by_user.get(uid),
+                "comments": comments_by_user.get(uid, []),
+            })
+        # Sort: latest comment first, then voted, then rest
+        def sort_key(p):
+            if p["comments"]:
+                return (0, -max(c["created_at"] for c in p["comments"]).__hash__())
+            if p["vote_type"]:
+                return (1, 0)
+            return (2, 0)
+        participants.sort(key=sort_key)
+
+    total_employees = await db.users.count_documents({"role": "employee"})
+    reactor_ids = set(vote_by_user.keys())
+
     return {
         **{k: v for k, v in q.items() if k != "_id"},
         "author": author,
         "agree_count": agree,
         "disagree_count": disagree,
         "total_engagement": agree + disagree,
+        "comment_count": len(comments),
+        "reactor_count": len(reactor_ids),
+        "total_employees": total_employees,
         "my_vote": my_vote,
+        "participants": participants,
     }
 
 
@@ -398,6 +449,7 @@ async def delete_query(qid: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Not allowed")
     await db.queries.delete_one({"id": qid})
     await db.votes.delete_many({"query_id": qid})
+    await db.comments.delete_many({"query_id": qid})
     if user["role"] == "admin" and q["user_id"] != user["id"]:
         await add_notification(q["user_id"], "Query removed by admin", f"Your query '{q['title']}' was removed by an admin.", "query_deleted")
     else:
@@ -444,6 +496,44 @@ async def vote(qid: str, body: VoteIn, user: dict = Depends(get_current_user)):
                 "high_engagement",
                 related_query_id=qid,
             )
+    return await enrich_query(q, user["id"])
+
+
+# ---------------- Comments ----------------
+@api.post("/queries/{qid}/comments")
+async def add_comment(qid: str, body: CommentIn, user: dict = Depends(get_current_user)):
+    q = await db.queries.find_one({"id": qid}, {"_id": 0})
+    if not q:
+        raise HTTPException(status_code=404, detail="Query not found")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "query_id": qid,
+        "user_id": user["id"],
+        "text": body.text.strip(),
+        "created_at": now_iso(),
+    }
+    await db.comments.insert_one(doc)
+    # Notify author (not self)
+    if q["user_id"] != user["id"]:
+        await add_notification(
+            q["user_id"],
+            "New comment on your query",
+            f"{user['name']} commented on '{q['title']}'",
+            "new_comment",
+            related_query_id=qid,
+        )
+    return await enrich_query(q, user["id"])
+
+
+@api.delete("/queries/{qid}/comments/{cid}")
+async def delete_comment(qid: str, cid: str, user: dict = Depends(get_current_user)):
+    c = await db.comments.find_one({"id": cid, "query_id": qid}, {"_id": 0})
+    if not c:
+        raise HTTPException(status_code=404, detail="Comment not found")
+    if c["user_id"] != user["id"] and user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not allowed")
+    await db.comments.delete_one({"id": cid})
+    q = await db.queries.find_one({"id": qid}, {"_id": 0})
     return await enrich_query(q, user["id"])
 
 
@@ -542,12 +632,14 @@ async def admin_delete_employee(uid: str, user: dict = Depends(require_admin)):
     if not target or target["role"] != "employee":
         raise HTTPException(status_code=404, detail="Employee not found")
     await db.users.delete_one({"id": uid})
-    # Cascade delete queries & votes by user
+    # Cascade delete queries & votes & comments by user
     q_ids = [q["id"] async for q in db.queries.find({"user_id": uid}, {"_id": 0, "id": 1})]
     if q_ids:
         await db.queries.delete_many({"user_id": uid})
         await db.votes.delete_many({"query_id": {"$in": q_ids}})
+        await db.comments.delete_many({"query_id": {"$in": q_ids}})
     await db.votes.delete_many({"user_id": uid})
+    await db.comments.delete_many({"user_id": uid})
     return {"message": "Employee deleted"}
 
 
@@ -563,6 +655,111 @@ async def admin_stats(user: dict = Depends(require_admin)):
         "total_employees": await db.users.count_documents({"role": "employee"}),
         "total_queries": await db.queries.count_documents({}),
         "total_votes": await db.votes.count_documents({}),
+        "total_comments": await db.comments.count_documents({}),
+    }
+
+
+@api.get("/admin/analytics")
+async def admin_analytics(user: dict = Depends(require_admin)):
+    """Monthly analytics: last 6 months of queries, comments, and reactions."""
+    now = datetime.now(timezone.utc)
+    # Build 6 monthly buckets (oldest -> newest)
+    buckets = []
+    for i in range(5, -1, -1):
+        y = now.year
+        m = now.month - i
+        while m <= 0:
+            m += 12
+            y -= 1
+        start = datetime(y, m, 1, tzinfo=timezone.utc)
+        if m == 12:
+            end = datetime(y + 1, 1, 1, tzinfo=timezone.utc)
+        else:
+            end = datetime(y, m + 1, 1, tzinfo=timezone.utc)
+        buckets.append({"start": start, "end": end, "label": start.strftime("%b %Y")})
+
+    async def count_in(coll, start_iso, end_iso, field="created_at"):
+        return await coll.count_documents({field: {"$gte": start_iso, "$lt": end_iso}})
+
+    monthly = []
+    for b in buckets:
+        s_iso = b["start"].isoformat()
+        e_iso = b["end"].isoformat()
+        monthly.append({
+            "label": b["label"],
+            "queries": await count_in(db.queries, s_iso, e_iso),
+            "comments": await count_in(db.comments, s_iso, e_iso),
+            "reactions": await count_in(db.votes, s_iso, e_iso),
+        })
+
+    # This-month specific totals
+    this_start = buckets[-1]["start"].isoformat()
+    this_end = buckets[-1]["end"].isoformat()
+    this_month = {
+        "queries": await count_in(db.queries, this_start, this_end),
+        "comments": await count_in(db.comments, this_start, this_end),
+        "reactions": await count_in(db.votes, this_start, this_end),
+    }
+
+    # Top-engaged queries this month (by comments + reactions on the query)
+    q_docs = await db.queries.find(
+        {"created_at": {"$gte": this_start}},
+        {"_id": 0},
+    ).to_list(1000)
+    scored = []
+    for q in q_docs:
+        rc = await db.votes.count_documents({"query_id": q["id"]})
+        cc = await db.comments.count_documents({"query_id": q["id"]})
+        author = await db.users.find_one({"id": q["user_id"]}, {"_id": 0, "name": 1, "designation": 1})
+        scored.append({
+            "id": q["id"],
+            "title": q["title"],
+            "reactions": rc,
+            "comments": cc,
+            "engagement": rc + cc,
+            "author_name": (author or {}).get("name"),
+            "author_designation": (author or {}).get("designation"),
+            "created_at": q["created_at"],
+        })
+    scored.sort(key=lambda x: x["engagement"], reverse=True)
+    top_queries = scored[:5]
+
+    # Recent comments across the platform (last 10)
+    recent_comments_docs = await db.comments.find({}, {"_id": 0}).sort("created_at", -1).to_list(10)
+    recent_comments = []
+    for c in recent_comments_docs:
+        u = await db.users.find_one({"id": c["user_id"]}, {"_id": 0, "name": 1, "designation": 1})
+        q = await db.queries.find_one({"id": c["query_id"]}, {"_id": 0, "title": 1})
+        recent_comments.append({
+            "id": c["id"],
+            "text": c["text"],
+            "created_at": c["created_at"],
+            "author_name": (u or {}).get("name") or "Unknown",
+            "author_designation": (u or {}).get("designation"),
+            "query_title": (q or {}).get("title") or "(deleted query)",
+            "query_id": c["query_id"],
+        })
+
+    # Department-wise breakdown of employees vs. queries
+    dept_agg = await db.users.aggregate([
+        {"$match": {"role": "employee"}},
+        {"$group": {"_id": "$department", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+    ]).to_list(50)
+    departments = [{"name": d["_id"] or "Unassigned", "employees": d["count"]} for d in dept_agg]
+
+    return {
+        "monthly": monthly,
+        "this_month": this_month,
+        "top_queries": top_queries,
+        "recent_comments": recent_comments,
+        "departments": departments,
+        "totals": {
+            "employees": await db.users.count_documents({"role": "employee"}),
+            "queries": await db.queries.count_documents({}),
+            "reactions": await db.votes.count_documents({}),
+            "comments": await db.comments.count_documents({}),
+        },
     }
 
 

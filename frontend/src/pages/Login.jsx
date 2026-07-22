@@ -22,7 +22,7 @@ export default function Login() {
         setBusy(true);
         try {
             const u = await login(employeeId.trim(), password);
-            nav(u.role === "admin" ? "/admin/employees" : "/");
+            nav(u.role === "admin" ? "/admin" : "/");
         } catch (err) {
             setError(formatApiError(err, "Login failed"));
         } finally {

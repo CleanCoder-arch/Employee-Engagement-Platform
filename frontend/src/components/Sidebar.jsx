@@ -39,18 +39,22 @@ export default function Sidebar() {
             </div>
 
             <nav className="flex flex-col gap-1 flex-1">
-                <Item to="/" icon={LayoutGrid} label="Dashboard" testid="nav-dashboard" />
-                <Item to="/queries" icon={MessageSquareText} label="Company Query" testid="nav-queries" />
-                <Item to="/post" icon={FilePlus2} label="Post Query" testid="nav-post" />
-                <Item to="/profile" icon={User} label="Profile" testid="nav-profile" />
+                {!isAdmin && (
+                    <>
+                        <Item to="/" icon={LayoutGrid} label="Dashboard" testid="nav-dashboard" />
+                        <Item to="/queries" icon={MessageSquareText} label="Company Query" testid="nav-queries" />
+                        <Item to="/post" icon={FilePlus2} label="Post Query" testid="nav-post" />
+                        <Item to="/profile" icon={User} label="Profile" testid="nav-profile" />
+                    </>
+                )}
 
                 {isAdmin && (
                     <>
-                        <div className="mt-6 mb-2 px-6 text-[11px] font-semibold uppercase tracking-widest text-slate-500">
-                            Admin
-                        </div>
+                        <Item to="/admin" icon={LayoutGrid} label="Dashboard" testid="nav-admin-dashboard" />
                         <Item to="/admin/employees" icon={Users} label="Employees" testid="nav-admin-employees" />
                         <Item to="/admin/queries" icon={ShieldCheck} label="All Queries" testid="nav-admin-queries" />
+                        <Item to="/queries" icon={MessageSquareText} label="Company Query" testid="nav-queries" />
+                        <Item to="/profile" icon={User} label="Profile" testid="nav-profile" />
                     </>
                 )}
             </nav>

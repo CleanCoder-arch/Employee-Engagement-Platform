@@ -7,6 +7,7 @@ import { ThumbsUp, ThumbsDown, Share2, Search, X, Loader2 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { ReactionFill } from "./Dashboard";
 import { toast } from "sonner";
+import QueryParticipants from "../components/QueryParticipants";
 
 const FILTERS = [
     { key: "all", label: "All time" },
@@ -142,7 +143,14 @@ export default function CompanyQuery() {
 
             <div className="space-y-4">
                 {items.map((q) => (
-                    <QueryCard key={q.id} q={q} me={user} onVote={vote} onShare={share} />
+                    <QueryCard
+                        key={q.id}
+                        q={q}
+                        me={user}
+                        onVote={vote}
+                        onShare={share}
+                        onUpdate={(updated) => setItems((prev) => prev.map((x) => (x.id === updated.id ? updated : x)))}
+                    />
                 ))}
             </div>
 
@@ -162,12 +170,14 @@ export default function CompanyQuery() {
     );
 }
 
-function QueryCard({ q, me, onVote, onShare }) {
+function QueryCard({ q, me, onVote, onShare, onUpdate }) {
     const a = q.author || {};
     const isMine = q.user_id === me?.id;
     const initials = initialsOf(a.name);
     const bg = colorFor(a.id || a.employee_id || "x");
     const total = q.agree_count + q.disagree_count;
+    const totalEmployees = q.total_employees ?? total;
+    const reactorCount = q.reactor_count ?? total;
 
     return (
         <div className="bg-white rounded-2xl border border-slate-100 p-6 card-lift" data-testid={`query-card-${q.id}`}>
@@ -202,8 +212,8 @@ function QueryCard({ q, me, onVote, onShare }) {
                 <div className="reaction-bar">
                     <ReactionFill agree={q.agree_count} disagree={q.disagree_count} />
                 </div>
-                <div className="mt-2 text-right text-[12px] text-slate-500">
-                    {total} {total === 1 ? "employee" : "employees"} reacted
+                <div className="mt-2 text-right text-[12px] text-slate-500" data-testid={`reaction-summary-${q.id}`}>
+                    <b className="text-slate-700">{reactorCount}</b> of {totalEmployees} {totalEmployees === 1 ? "employee" : "employees"} reacted
                 </div>
             </div>
 
@@ -238,6 +248,8 @@ function QueryCard({ q, me, onVote, onShare }) {
                     <Share2 className="w-4 h-4" /> Share
                 </button>
             </div>
+
+            <QueryParticipants query={q} me={me} onUpdate={onUpdate} />
         </div>
     );
 }
