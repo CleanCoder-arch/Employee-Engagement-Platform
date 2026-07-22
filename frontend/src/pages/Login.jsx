@@ -159,12 +159,6 @@ export default function Login() {
                         >
                             {busy ? "Signing in..." : "Sign in"}
                         </button>
-
-                        <div className="mt-8 p-4 rounded-xl bg-slate-50 border border-slate-200 text-[12px] text-slate-600">
-                            <div className="font-semibold text-slate-700 mb-1">Demo credentials</div>
-                            Admin: <b>AP10000</b> / Admin@123 <br />
-                            Employee: <b>AP10234</b> / Employee@123
-                        </div>
                     </form>
                 </div>
             </div>
