@@ -309,7 +309,13 @@ async def create_query(body: QueryIn, user: dict = Depends(get_current_user)):
 
 
 @api.get("/queries")
-async def list_queries(user: dict = Depends(get_current_user), filter: str = "all"):
+async def list_queries(
+    user: dict = Depends(get_current_user),
+    filter: str = "all",
+    q: str = "",
+    page: int = 1,
+    limit: int = 5,
+):
     now = datetime.now(timezone.utc)
     query = {}
     if filter == "today":
@@ -321,9 +327,43 @@ async def list_queries(user: dict = Depends(get_current_user), filter: str = "al
     elif filter == "month":
         start = now - timedelta(days=30)
         query["created_at"] = {"$gte": start.isoformat()}
-    cursor = db.queries.find(query, {"_id": 0}).sort("created_at", -1)
-    items = await cursor.to_list(1000)
-    return [await enrich_query(q, user["id"]) for q in items]
+
+    # Full-text style search (title/description + author name/employee_id/department)
+    search = (q or "").strip()
+    if search:
+        import re
+        pattern = re.compile(re.escape(search), re.IGNORECASE)
+        matching_user_ids = [
+            u["id"] async for u in db.users.find(
+                {"$or": [
+                    {"name": {"$regex": pattern}},
+                    {"employee_id": {"$regex": pattern}},
+                    {"department": {"$regex": pattern}},
+                    {"designation": {"$regex": pattern}},
+                ]},
+                {"_id": 0, "id": 1},
+            )
+        ]
+        query["$or"] = [
+            {"title": {"$regex": pattern}},
+            {"description": {"$regex": pattern}},
+            {"user_id": {"$in": matching_user_ids}},
+        ]
+
+    limit = max(1, min(limit, 50))
+    page = max(1, page)
+    skip = (page - 1) * limit
+    total = await db.queries.count_documents(query)
+    cursor = db.queries.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(limit)
+    items = await cursor.to_list(limit)
+    enriched = [await enrich_query(qd, user["id"]) for qd in items]
+    return {
+        "items": enriched,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "has_more": skip + len(enriched) < total,
+    }
 
 
 @api.get("/queries/mine")

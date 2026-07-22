@@ -1,9 +1,9 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import Layout from "../components/Layout";
 import api, { formatApiError } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { fmtDateTime, initialsOf } from "../lib/utils-date";
-import { ThumbsUp, ThumbsDown, Share2 } from "lucide-react";
+import { ThumbsUp, ThumbsDown, Share2, Search, X, Loader2 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { ReactionFill } from "./Dashboard";
 import { toast } from "sonner";
@@ -14,6 +14,7 @@ const FILTERS = [
     { key: "week", label: "This week" },
     { key: "month", label: "This month" },
 ];
+const PAGE_SIZE = 5;
 
 const AVATAR_COLORS = ["#F97316", "#3B82F6", "#10B981", "#8B5CF6", "#EF4444", "#0EA5E9", "#EC4899"];
 function colorFor(id) {
@@ -25,18 +26,42 @@ function colorFor(id) {
 export default function CompanyQuery() {
     const { user } = useAuth();
     const [filter, setFilter] = useState("all");
+    const [searchInput, setSearchInput] = useState("");
+    const [search, setSearch] = useState(""); // debounced
     const [items, setItems] = useState([]);
+    const [page, setPage] = useState(1);
+    const [total, setTotal] = useState(0);
+    const [hasMore, setHasMore] = useState(false);
     const [loading, setLoading] = useState(true);
+    const [loadingMore, setLoadingMore] = useState(false);
 
-    const load = useCallback(async () => {
-        setLoading(true);
+    // Debounce search input
+    const debTimer = useRef(null);
+    useEffect(() => {
+        if (debTimer.current) clearTimeout(debTimer.current);
+        debTimer.current = setTimeout(() => setSearch(searchInput.trim()), 300);
+        return () => debTimer.current && clearTimeout(debTimer.current);
+    }, [searchInput]);
+
+    const loadPage = useCallback(async (targetPage, append) => {
+        if (append) setLoadingMore(true); else setLoading(true);
         try {
-            const { data } = await api.get(`/queries?filter=${filter}`);
-            setItems(data);
-        } finally { setLoading(false); }
-    }, [filter]);
+            const { data } = await api.get(`/queries`, {
+                params: { filter, q: search, page: targetPage, limit: PAGE_SIZE },
+            });
+            setTotal(data.total);
+            setHasMore(data.has_more);
+            setPage(data.page);
+            setItems((prev) => (append ? [...prev, ...data.items] : data.items));
+        } finally {
+            if (append) setLoadingMore(false); else setLoading(false);
+        }
+    }, [filter, search]);
 
-    useEffect(() => { load(); }, [load]);
+    // Reset & load first page whenever filter or search changes
+    useEffect(() => {
+        loadPage(1, false);
+    }, [loadPage]);
 
     const vote = async (q, type) => {
         try {
@@ -60,21 +85,44 @@ export default function CompanyQuery() {
 
     return (
         <Layout title="Company Query">
-            <div className="flex items-center justify-between mb-5">
-                <div className="text-[14px] text-slate-500" data-testid="query-count-label">
-                    Showing <b className="text-slate-800">{items.length}</b> {items.length === 1 ? "query" : "queries"}
+            {/* Toolbar */}
+            <div className="flex items-center justify-between gap-3 mb-5 flex-wrap">
+                <div className="relative flex-1 min-w-[220px] max-w-md">
+                    <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                        value={searchInput}
+                        onChange={(e) => setSearchInput(e.target.value)}
+                        placeholder="Search queries, authors, departments…"
+                        data-testid="query-search-input"
+                        className="w-full pl-10 pr-9 py-2.5 rounded-xl border border-slate-200 bg-white focus:border-orange-500 focus:ring-2 focus:ring-orange-100 transition text-[14px]"
+                    />
+                    {searchInput && (
+                        <button
+                            onClick={() => setSearchInput("")}
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-slate-100 text-slate-400"
+                            aria-label="Clear search"
+                            data-testid="query-search-clear"
+                        >
+                            <X className="w-4 h-4" />
+                        </button>
+                    )}
                 </div>
-                <div className="w-44">
-                    <Select value={filter} onValueChange={setFilter}>
-                        <SelectTrigger data-testid="query-filter-trigger" className="rounded-xl border-slate-200 bg-white">
-                            <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                            {FILTERS.map((f) => (
-                                <SelectItem key={f.key} value={f.key} data-testid={`filter-${f.key}`}>{f.label}</SelectItem>
-                            ))}
-                        </SelectContent>
-                    </Select>
+                <div className="flex items-center gap-3">
+                    <div className="text-[14px] text-slate-500" data-testid="query-count-label">
+                        Showing <b className="text-slate-800">{items.length}</b> of {total}
+                    </div>
+                    <div className="w-40">
+                        <Select value={filter} onValueChange={setFilter}>
+                            <SelectTrigger data-testid="query-filter-trigger" className="rounded-xl border-slate-200 bg-white">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {FILTERS.map((f) => (
+                                    <SelectItem key={f.key} value={f.key} data-testid={`filter-${f.key}`}>{f.label}</SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    </div>
                 </div>
             </div>
 
@@ -85,8 +133,10 @@ export default function CompanyQuery() {
             )}
 
             {!loading && items.length === 0 && (
-                <div className="bg-white rounded-2xl border border-slate-100 py-16 text-center text-slate-500">
-                    No queries found for this filter.
+                <div className="bg-white rounded-2xl border border-slate-100 py-16 text-center text-slate-500" data-testid="query-empty-state">
+                    {search
+                        ? <>No queries match “<b className="text-slate-700">{search}</b>”.</>
+                        : "No queries found for this filter."}
                 </div>
             )}
 
@@ -95,6 +145,19 @@ export default function CompanyQuery() {
                     <QueryCard key={q.id} q={q} me={user} onVote={vote} onShare={share} />
                 ))}
             </div>
+
+            {!loading && hasMore && (
+                <div className="mt-6 flex justify-center">
+                    <button
+                        onClick={() => loadPage(page + 1, true)}
+                        disabled={loadingMore}
+                        data-testid="query-load-more-btn"
+                        className="px-6 py-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 font-semibold text-slate-700 text-[14px] inline-flex items-center gap-2 disabled:opacity-60"
+                    >
+                        {loadingMore ? <><Loader2 className="w-4 h-4 animate-spin" /> Loading…</> : `Load more (${total - items.length} remaining)`}
+                    </button>
+                </div>
+            )}
         </Layout>
     );
 }

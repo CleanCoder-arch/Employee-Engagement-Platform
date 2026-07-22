@@ -1,5 +1,5 @@
-import { useEffect, useState, useCallback } from "react";
-import { Bell, Check, Trash2, CheckCheck } from "lucide-react";
+import { useEffect, useState, useCallback, useMemo } from "react";
+import { Bell, Check, Trash2, CheckCheck, ThumbsUp, ThumbsDown } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
@@ -10,6 +10,60 @@ function timeAgo(iso) {
     if (s < 3600) return `${Math.floor(s / 60)}m ago`;
     if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
     return `${Math.floor(s / 86400)}d ago`;
+}
+
+// Groups consecutive vote notifications on the SAME query with the SAME type
+// into one entry: "Rupam Das and 3 others agreed with your query …"
+function groupNotifications(items) {
+    const result = [];
+    for (const n of items) {
+        const isVote = n.type === "vote_agree" || n.type === "vote_disagree";
+        const prev = result[result.length - 1];
+        if (
+            isVote && prev && prev._group &&
+            prev.type === n.type &&
+            prev.related_query_id === n.related_query_id &&
+            prev.is_read === n.is_read
+        ) {
+            prev._ids.push(n.id);
+            prev._count += 1;
+            // Keep the newest created_at (list is desc), the first one we saw
+            continue;
+        }
+        if (isVote) {
+            result.push({
+                ...n,
+                _group: true,
+                _ids: [n.id],
+                _count: 1,
+            });
+        } else {
+            result.push({ ...n, _group: false, _ids: [n.id], _count: 1 });
+        }
+    }
+    return result;
+}
+
+function extractActor(message) {
+    // Backend messages like: "Rupam Das agreed with 'Title'" — first two words are usually the actor
+    if (!message) return "";
+    // Take everything before " agreed" / " disagreed"
+    const m = message.match(/^(.+?)\s+(?:agreed|disagreed)/i);
+    return m ? m[1] : message.split(" ").slice(0, 2).join(" ");
+}
+
+function groupedTitle(g) {
+    if (!g._group || g._count === 1) return g.title;
+    const verb = g.type === "vote_agree" ? "agreed with" : "disagreed with";
+    return `${g._count} people ${verb} your query`;
+}
+
+function groupedMessage(g) {
+    if (!g._group || g._count === 1) return g.message;
+    const actor = extractActor(g.message);
+    const verb = g.type === "vote_agree" ? "agreed" : "disagreed";
+    const others = g._count - 1;
+    return `${actor} and ${others} ${others === 1 ? "other" : "others"} ${verb} on your query.`;
 }
 
 export default function NotificationBell() {
@@ -32,23 +86,26 @@ export default function NotificationBell() {
         return () => clearInterval(t);
     }, [load]);
 
-    const markRead = async (id) => {
-        await api.put(`/notifications/${id}/read`);
+    const grouped = useMemo(() => groupNotifications(items), [items]);
+
+    const markGroupRead = async (g) => {
+        await Promise.all(g._ids.filter((_, i) => !g.is_read || i === 0).map((id) =>
+            api.put(`/notifications/${id}/read`).catch(() => null)
+        ));
         load();
     };
     const markAll = async () => {
         await api.put(`/notifications/read-all`);
         load();
     };
-    const del = async (id) => {
-        await api.delete(`/notifications/${id}`);
+    const delGroup = async (g) => {
+        await Promise.all(g._ids.map((id) => api.delete(`/notifications/${id}`).catch(() => null)));
         load();
     };
-    const openNotif = async (n) => {
-        if (!n.is_read) await api.put(`/notifications/${n.id}/read`);
+    const openGroup = async (g) => {
+        if (!g.is_read) await markGroupRead(g);
         setOpen(false);
-        if (n.related_query_id) nav("/queries");
-        load();
+        if (g.related_query_id) nav("/queries");
     };
 
     return (
@@ -85,42 +142,65 @@ export default function NotificationBell() {
                     )}
                 </div>
                 <div className="max-h-[420px] overflow-y-auto bg-white">
-                    {items.length === 0 && (
+                    {grouped.length === 0 && (
                         <div className="p-8 text-center text-slate-500 text-sm">No notifications yet</div>
                     )}
-                    {items.map((n) => (
-                        <div
-                            key={n.id}
-                            data-testid={`notification-item-${n.id}`}
-                            className={`px-4 py-3 border-b last:border-b-0 hover:bg-slate-50 cursor-pointer flex gap-3 ${!n.is_read ? "bg-orange-50/40" : ""}`}
-                            onClick={() => openNotif(n)}
-                        >
-                            <div className={`w-2 h-2 rounded-full mt-2 shrink-0 ${!n.is_read ? "bg-orange-500" : "bg-transparent"}`} />
-                            <div className="flex-1 min-w-0">
-                                <div className="text-[14px] font-semibold text-slate-900 truncate">{n.title}</div>
-                                <div className="text-[13px] text-slate-600 line-clamp-2">{n.message}</div>
-                                <div className="text-[11px] text-slate-400 mt-1">{timeAgo(n.created_at)}</div>
-                            </div>
-                            <div className="flex flex-col gap-1">
-                                {!n.is_read && (
+                    {grouped.map((g) => {
+                        const Icon = g.type === "vote_agree" ? ThumbsUp : g.type === "vote_disagree" ? ThumbsDown : null;
+                        const iconTone = g.type === "vote_agree"
+                            ? "bg-emerald-100 text-emerald-700"
+                            : g.type === "vote_disagree"
+                            ? "bg-orange-100 text-orange-700"
+                            : "bg-slate-100 text-slate-500";
+                        return (
+                            <div
+                                key={g.id}
+                                data-testid={`notification-item-${g.id}`}
+                                className={`px-4 py-3 border-b last:border-b-0 hover:bg-slate-50 cursor-pointer flex gap-3 ${!g.is_read ? "bg-orange-50/40" : ""}`}
+                                onClick={() => openGroup(g)}
+                            >
+                                <div className={`w-2 h-2 rounded-full mt-2 shrink-0 ${!g.is_read ? "bg-orange-500" : "bg-transparent"}`} />
+                                {Icon && (
+                                    <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${iconTone}`}>
+                                        <Icon className="w-4 h-4" />
+                                    </div>
+                                )}
+                                <div className="flex-1 min-w-0">
+                                    <div className="text-[14px] font-semibold text-slate-900 truncate flex items-center gap-2">
+                                        {groupedTitle(g)}
+                                        {g._group && g._count > 1 && (
+                                            <span
+                                                data-testid={`notification-group-badge-${g.id}`}
+                                                className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-orange-100 text-orange-700"
+                                            >
+                                                +{g._count}
+                                            </span>
+                                        )}
+                                    </div>
+                                    <div className="text-[13px] text-slate-600 line-clamp-2">{groupedMessage(g)}</div>
+                                    <div className="text-[11px] text-slate-400 mt-1">{timeAgo(g.created_at)}</div>
+                                </div>
+                                <div className="flex flex-col gap-1">
+                                    {!g.is_read && (
+                                        <button
+                                            onClick={(e) => { e.stopPropagation(); markGroupRead(g); }}
+                                            title="Mark read"
+                                            className="p-1 rounded hover:bg-slate-200"
+                                        >
+                                            <Check className="w-4 h-4 text-slate-500" />
+                                        </button>
+                                    )}
                                     <button
-                                        onClick={(e) => { e.stopPropagation(); markRead(n.id); }}
-                                        title="Mark read"
+                                        onClick={(e) => { e.stopPropagation(); delGroup(g); }}
+                                        title="Delete"
                                         className="p-1 rounded hover:bg-slate-200"
                                     >
-                                        <Check className="w-4 h-4 text-slate-500" />
+                                        <Trash2 className="w-4 h-4 text-slate-500" />
                                     </button>
-                                )}
-                                <button
-                                    onClick={(e) => { e.stopPropagation(); del(n.id); }}
-                                    title="Delete"
-                                    className="p-1 rounded hover:bg-slate-200"
-                                >
-                                    <Trash2 className="w-4 h-4 text-slate-500" />
-                                </button>
+                                </div>
                             </div>
-                        </div>
-                    ))}
+                        );
+                    })}
                 </div>
             </PopoverContent>
         </Popover>
