@@ -45,7 +45,7 @@ export default function AdminEmployees() {
                 delete body.id;
                 delete body.created_at;
                 delete body.role;
-                if (!body.password) delete body.password;
+                delete body.password; // password cannot be changed via edit
                 await api.put(`/admin/employees/${editing.id}`, body);
                 toast.success("Employee updated");
                 setEditing(null);
@@ -126,7 +126,7 @@ export default function AdminEmployees() {
                                     <td className="py-4">
                                         <div className="flex items-center gap-1 justify-end">
                                             <button
-                                                onClick={() => setEditing({ ...e, password: "" })}
+                                                onClick={() => setEditing({ ...e })}
                                                 data-testid={`edit-emp-btn-${e.employee_id}`}
                                                 className="p-2 rounded-lg text-blue-700 hover:bg-blue-50"
                                             ><Pencil className="w-4 h-4" /></button>
@@ -203,10 +203,17 @@ function EmployeeForm({ state, setState, isCreate }) {
                 <Field label="Designation">
                     <input value={state.designation} onChange={set("designation")} className={inputCls} data-testid="emp-form-designation" />
                 </Field>
-                <Field label={isCreate ? "Password" : "New password (optional)"}>
-                    <input type="password" value={state.password || ""} onChange={set("password")} className={inputCls} data-testid="emp-form-password" />
-                </Field>
+                {isCreate && (
+                    <Field label="Initial password">
+                        <input type="password" value={state.password || ""} onChange={set("password")} className={inputCls} data-testid="emp-form-password" placeholder="Min 8 characters" />
+                    </Field>
+                )}
             </div>
+            {!isCreate && (
+                <div className="mt-2 px-3 py-2.5 rounded-lg bg-slate-50 border border-slate-200 text-[12px] text-slate-600">
+                    Password can only be set at creation. Employees can change their own password from the Profile page.
+                </div>
+            )}
         </div>
     );
 }

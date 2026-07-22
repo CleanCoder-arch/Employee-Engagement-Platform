@@ -124,7 +124,6 @@ class EmployeeUpdateIn(BaseModel):
     email: Optional[EmailStr] = None
     department: Optional[str] = None
     designation: Optional[str] = None
-    password: Optional[str] = None
 
 
 # ---------------- Startup ----------------
@@ -530,9 +529,7 @@ async def admin_update_employee(uid: str, body: EmployeeUpdateIn, user: dict = D
     target = await db.users.find_one({"id": uid}, {"_id": 0})
     if not target or target["role"] != "employee":
         raise HTTPException(status_code=404, detail="Employee not found")
-    update = {k: v for k, v in body.model_dump(exclude_none=True).items() if k != "password"}
-    if body.password:
-        update["password_hash"] = hash_password(body.password)
+    update = body.model_dump(exclude_none=True)
     if update:
         await db.users.update_one({"id": uid}, {"$set": update})
     updated = await db.users.find_one({"id": uid}, {"_id": 0, "password_hash": 0})
