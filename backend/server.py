@@ -537,6 +537,21 @@ async def delete_comment(qid: str, cid: str, user: dict = Depends(get_current_us
     return await enrich_query(q, user["id"])
 
 
+@api.put("/queries/{qid}/comments/{cid}")
+async def update_comment(qid: str, cid: str, body: CommentIn, user: dict = Depends(get_current_user)):
+    c = await db.comments.find_one({"id": cid, "query_id": qid}, {"_id": 0})
+    if not c:
+        raise HTTPException(status_code=404, detail="Comment not found")
+    if c["user_id"] != user["id"]:
+        raise HTTPException(status_code=403, detail="You can only edit your own comment")
+    await db.comments.update_one(
+        {"id": cid},
+        {"$set": {"text": body.text.strip(), "updated_at": now_iso()}}
+    )
+    q = await db.queries.find_one({"id": qid}, {"_id": 0})
+    return await enrich_query(q, user["id"])
+
+
 # ---------------- Notifications ----------------
 @api.get("/notifications")
 async def list_notifications(user: dict = Depends(get_current_user)):

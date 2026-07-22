@@ -1,0 +1,22 @@
+{
+  "summary": "Iteration 3 – comment edit feature + APDCL branding. Backend: 6/6 new pytest cases pass covering PUT /api/queries/{qid}/comments/{cid}: owner edit persists updated_at, non-owner returns 403, admin also returns 403 (owner-only), 401 without auth, 422 for empty text, 404 for missing cid. Frontend: browser tab title is 'APDCL Connect' on login/dashboard/company query/admin queries; favicon <link rel=icon> points to APDCL logo JPG. Inline comment editor on QueryParticipants works end-to-end: pencil icon visible only to comment owner, textarea prefilled with existing text, N/2000 character counter renders, Save disabled when text is empty OR unchanged from original and enabled when a valid change is present, Save updates the DB and the UI shows the new text with an '(edited)' marker, Cancel discards the draft and restores original text. Non-owner employee (AP10789) sees neither edit nor delete button on emp1's comment; admin sees delete but NOT edit on another employee's comment (owner-only enforced in UI). Existing flows (post/delete comment, participants list, agree/disagree) remain functional.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": ["/app/backend/tests/test_comment_edit.py", "/app/backend/tests/test_backend.py", "/app/test_reports/pytest/pytest_iter3.xml"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Edit endpoint correctly returns 403 for both non-owner employees and admins (owner-only), distinct from delete which is owner-OR-admin. Verified in tests and UI.",
+    "Comment 'updated_at' is only set on edit (initial POST does not set it), so the '(edited)' marker toggles precisely — good design.",
+    "Edit button visibility uses opacity-0 group-hover:opacity-100 — only appears on hover. This is fine on desktop but may be hard to discover on touch devices; consider always-visible on mobile.",
+    "server.py still 780+ lines — recommend splitting into routers (auth, queries, comments, admin, notifications) when adding more endpoints.",
+    "Non-blocking: enrich_query() sort key still uses `-max(...).__hash__()` on ISO strings — non-deterministic ordering within commented group (flagged in iter 2, still present)."
+  ],
+  "updated_files": ["/app/backend/tests/test_comment_edit.py"],
+  "success_rate": {"backend": "100% (6/6 iter3 tests)", "frontend": "100%"},
+  "test_credentials": "Admin AP10000/Admin@123; Employees AP10234, AP10789, AP10812 with Employee@123",
+  "seed_data_creation": "Transient 'TEST_' prefixed comments created and cleaned up during tests; a few may remain from earlier iterations but are harmless.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Login redirects to '/' (not '/dashboard'). Comment edit is owner-only for BOTH employees and admins by design (unlike delete which is owner-OR-admin). Edit button on comments only appears on hover — use JS .click() rather than Playwright click if you need to skip hover in tests. data-testids used: edit-comment-btn-{cid}, edit-comment-form-{cid}, edit-comment-input-{cid}, edit-comment-save-{cid}, edit-comment-cancel-{cid}.",
+  "rca of the issue": "No issues found."
+}

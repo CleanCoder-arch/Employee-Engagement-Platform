@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ThumbsUp, ThumbsDown, MessageCircle, Send, Trash2 } from "lucide-react";
+import { ThumbsUp, ThumbsDown, MessageCircle, Send, Trash2, Pencil, Check, X } from "lucide-react";
 import api, { formatApiError } from "../lib/api";
 import { toast } from "sonner";
 import { initialsOf, timeAgo } from "../lib/utils-date";
@@ -47,6 +47,22 @@ export default function QueryParticipants({ query, me, onUpdate }) {
         }
     };
 
+    const editComment = async (cid, newText) => {
+        const t = newText.trim();
+        if (!t) {
+            toast.error("Comment cannot be empty");
+            return false;
+        }
+        try {
+            const { data } = await api.put(`/queries/${query.id}/comments/${cid}`, { text: t });
+            onUpdate?.(data);
+            return true;
+        } catch (err) {
+            toast.error(formatApiError(err, "Failed to update comment"));
+            return false;
+        }
+    };
+
     return (
         <div className="mt-5 pt-5 border-t border-slate-100">
             <div className="flex items-center justify-between mb-3">
@@ -69,6 +85,7 @@ export default function QueryParticipants({ query, me, onUpdate }) {
                             me={me}
                             queryId={query.id}
                             onDeleteComment={deleteComment}
+                            onEditComment={editComment}
                         />
                     ))}
                     {remaining > 0 && !expanded && (
@@ -121,7 +138,7 @@ export default function QueryParticipants({ query, me, onUpdate }) {
     );
 }
 
-function ParticipantRow({ p, me, queryId, onDeleteComment }) {
+function ParticipantRow({ p, me, queryId, onDeleteComment, onEditComment }) {
     const initials = initialsOf(p.name);
     const bg = colorFor(p.user_id);
     const badge = p.vote_type === "agree"
@@ -150,30 +167,108 @@ function ParticipantRow({ p, me, queryId, onDeleteComment }) {
                 </div>
             </div>
             {p.comments && p.comments.length > 0 && (
-                <div className="mt-2 pl-10.5 space-y-1.5" style={{ paddingLeft: "42px" }}>
-                    {p.comments.map((c) => {
-                        const canDelete = c.user_id === me?.id || me?.role === "admin";
-                        return (
-                            <div key={c.id} className="group flex items-start gap-2 text-[13px] text-slate-700 leading-relaxed">
-                                <div className="flex-1">
-                                    {c.text}
-                                    <span className="ml-2 text-[11px] text-slate-400">{timeAgo(c.created_at)}</span>
-                                </div>
-                                {canDelete && (
-                                    <button
-                                        onClick={() => onDeleteComment(c.id)}
-                                        data-testid={`delete-comment-${c.id}`}
-                                        className="opacity-0 group-hover:opacity-100 transition p-1 rounded text-slate-400 hover:text-red-600 hover:bg-red-50"
-                                        aria-label="Delete comment"
-                                    >
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
-                                )}
-                            </div>
-                        );
-                    })}
+                <div className="mt-2 space-y-1.5" style={{ paddingLeft: "42px" }}>
+                    {p.comments.map((c) => (
+                        <CommentLine
+                            key={c.id}
+                            c={c}
+                            me={me}
+                            onDelete={() => onDeleteComment(c.id)}
+                            onEdit={(newText) => onEditComment(c.id, newText)}
+                        />
+                    ))}
                 </div>
             )}
+        </div>
+    );
+}
+
+function CommentLine({ c, me, onDelete, onEdit }) {
+    const [editing, setEditing] = useState(false);
+    const [draft, setDraft] = useState(c.text);
+    const [saving, setSaving] = useState(false);
+    const isOwner = c.user_id === me?.id;
+    const canDelete = isOwner || me?.role === "admin";
+    const canEdit = isOwner; // Only the comment owner can edit
+
+    const save = async () => {
+        setSaving(true);
+        const ok = await onEdit(draft);
+        setSaving(false);
+        if (ok) setEditing(false);
+    };
+    const cancel = () => { setDraft(c.text); setEditing(false); };
+
+    if (editing) {
+        return (
+            <div className="flex items-start gap-2" data-testid={`edit-comment-form-${c.id}`}>
+                <div className="flex-1">
+                    <textarea
+                        value={draft}
+                        onChange={(e) => setDraft(e.target.value)}
+                        rows={2}
+                        maxLength={2000}
+                        autoFocus
+                        data-testid={`edit-comment-input-${c.id}`}
+                        className="w-full px-3 py-2 rounded-lg border border-slate-200 bg-white focus:border-orange-500 focus:ring-2 focus:ring-orange-100 transition text-[13px] resize-y"
+                    />
+                    <div className="mt-1.5 flex items-center gap-2">
+                        <button
+                            onClick={save}
+                            disabled={saving || !draft.trim() || draft.trim() === c.text}
+                            data-testid={`edit-comment-save-${c.id}`}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-white text-[12px] font-semibold disabled:opacity-40"
+                            style={{ background: "var(--brand-orange)" }}
+                        >
+                            <Check className="w-3.5 h-3.5" /> {saving ? "Saving…" : "Save"}
+                        </button>
+                        <button
+                            onClick={cancel}
+                            data-testid={`edit-comment-cancel-${c.id}`}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-slate-600 hover:bg-slate-100 text-[12px] font-semibold"
+                        >
+                            <X className="w-3.5 h-3.5" /> Cancel
+                        </button>
+                        <span className="text-[11px] text-slate-400 ml-auto tabular-nums">{draft.length}/2000</span>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="group flex items-start gap-2 text-[13px] text-slate-700 leading-relaxed">
+            <div className="flex-1">
+                {c.text}
+                <span className="ml-2 text-[11px] text-slate-400">
+                    {timeAgo(c.created_at)}
+                    {c.updated_at && c.updated_at !== c.created_at && (
+                        <span className="ml-1 italic" title={`Edited ${timeAgo(c.updated_at)}`}>(edited)</span>
+                    )}
+                </span>
+            </div>
+            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition shrink-0">
+                {canEdit && (
+                    <button
+                        onClick={() => setEditing(true)}
+                        data-testid={`edit-comment-btn-${c.id}`}
+                        className="p-1 rounded text-slate-400 hover:text-blue-700 hover:bg-blue-50"
+                        aria-label="Edit comment"
+                    >
+                        <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                )}
+                {canDelete && (
+                    <button
+                        onClick={onDelete}
+                        data-testid={`delete-comment-${c.id}`}
+                        className="p-1 rounded text-slate-400 hover:text-red-600 hover:bg-red-50"
+                        aria-label="Delete comment"
+                    >
+                        <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                )}
+            </div>
         </div>
     );
 }
